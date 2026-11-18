@@ -1,0 +1,633 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Customer Health Dashboard</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:'Inter',system-ui,sans-serif;background:#F7F4FF;color:#1A0033;min-height:100vh}
+header{background:#3B0070;color:#fff;padding:20px 32px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px}
+header h1{font-size:1.3rem;font-weight:700}
+.meta{font-size:.85rem;opacity:.75}
+.stats{display:flex;gap:16px;flex-wrap:wrap;padding:24px 32px 0}
+.stat-card{background:#fff;border-radius:12px;padding:16px 22px;border:1px solid #E8DFF5;min-width:140px}
+.stat-card .label{font-size:.75rem;color:#5C4878;text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px}
+.stat-card .value{font-size:1.6rem;font-weight:700;color:#3B0070}
+.stat-card .sub{font-size:.78rem;color:#9B84B8;margin-top:2px}
+.controls{padding:20px 32px;display:flex;gap:12px;flex-wrap:wrap;align-items:center}
+.filter-btn{padding:7px 16px;border-radius:20px;border:1.5px solid #E8DFF5;background:#fff;cursor:pointer;font-size:.85rem;color:#5C4878;transition:all .15s}
+.filter-btn.active,.filter-btn:hover{background:#3B0070;color:#fff;border-color:#3B0070}
+input[type=search]{padding:7px 14px;border-radius:20px;border:1.5px solid #E8DFF5;font-size:.85rem;outline:none;min-width:200px;color:#1A0033}
+input[type=search]:focus{border-color:#7B00C2}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px;padding:0 32px 40px}
+.card{background:#fff;border-radius:14px;border:1.5px solid #E8DFF5;overflow:hidden;transition:box-shadow .15s}
+.card:hover{box-shadow:0 4px 20px rgba(59,0,112,.1)}
+.card-header{padding:14px 18px;display:flex;align-items:flex-start;justify-content:space-between;gap:8px}
+.card-header .name{font-weight:600;font-size:.95rem;color:#1A0033;flex:1}
+.status-badge{padding:3px 10px;border-radius:10px;font-size:.78rem;font-weight:600;white-space:nowrap}
+.recovery-tag{font-size:.72rem;background:#E8F5E9;color:#2E7D32;border-radius:8px;padding:2px 7px;margin-left:6px}
+.card-body{padding:0 18px 14px}
+.metrics-row{display:flex;gap:16px;flex-wrap:wrap;margin:10px 0}
+.metric{text-align:center}
+.metric .m-val{font-size:1.1rem;font-weight:700;color:#3B0070}
+.metric .m-label{font-size:.68rem;color:#9B84B8}
+.features{display:flex;flex-wrap:wrap;gap:5px;margin-bottom:10px}
+.feat-tag{font-size:.7rem;background:#F7F4FF;color:#5C4878;border-radius:6px;padding:2px 7px;border:1px solid #E8DFF5}
+.evo-link{font-size:.78rem;color:#7B00C2;cursor:pointer;display:inline-flex;align-items:center;gap:4px;text-decoration:none;background:none;border:none;padding:0}
+.evo-link:hover{text-decoration:underline}
+.modal-overlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:1000;align-items:center;justify-content:center}
+.modal-overlay.open{display:flex}
+.modal{background:#fff;border-radius:16px;padding:28px;width:90%;max-width:780px;max-height:90vh;overflow-y:auto;position:relative}
+.modal-title{font-size:1.1rem;font-weight:700;color:#1A0033;margin-bottom:4px}
+.modal-sub{font-size:.82rem;color:#9B84B8;margin-bottom:20px}
+.modal-close{position:absolute;top:16px;right:18px;background:none;border:none;font-size:1.4rem;cursor:pointer;color:#5C4878}
+.chart-section{margin-bottom:28px}
+.chart-section h3{font-size:.82rem;text-transform:uppercase;letter-spacing:.5px;color:#5C4878;margin-bottom:10px}
+.chart-section canvas{max-height:220px}
+</style>
+</head>
+<body>
+<header>
+  <div>
+    <h1>Customer Health Dashboard</h1>
+    <div class="meta" id="headerMeta"></div>
+  </div>
+</header>
+<div class="stats" id="statsRow"></div>
+<div class="controls">
+  <button class="filter-btn active" onclick="setFilter('all',this)">Todas</button>
+  <button class="filter-btn" onclick="setFilter('🟢',this)">🟢 Healthy</button>
+  <button class="filter-btn" onclick="setFilter('🟡',this)">🟡 Needs Attention</button>
+  <button class="filter-btn" onclick="setFilter('🔴',this)">🔴 At Risk</button>
+  <input type="search" id="searchBox" placeholder="Buscar empresa..." oninput="renderCards()">
+</div>
+<div id="cardGrid" class="grid"></div>
+<div class="modal-overlay" id="modalOverlay" onclick="closeModal(event)">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModalDirect()">&#x2715;</button>
+    <div class="modal-title" id="modalTitle"></div>
+    <div class="modal-sub" id="modalSub"></div>
+    <div class="chart-section"><h3>Total eventos</h3><canvas id="chartTotal"></canvas></div>
+    <div class="chart-section"><h3>Por feature</h3><canvas id="chartFeatures"></canvas></div>
+  </div>
+</div>
+<script>
+const MONTHS = ["Ene 2026","Feb 2026","Mar 2026","Abr 2026","May 2026"];
+const CURRENT_MONTH_IDX = 4;
+const FEATURE_LABELS = {feature1:'Feature 1',feature2:'Feature 2',feature3:'Feature 3',feature4:'Feature 4',feature5:'Feature 5',feature6:'Feature 6',feature7:'Feature 7',feature8:'Feature 8'};
+const ALL_FEATURES = Object.keys(FEATURE_LABELS);
+const STATUS_COLOR = {'🟢':{bg:'#E8F5E9',text:'#2E7D32',border:'#A5D6A7',label:'Healthy'},'🟡':{bg:'#FFF8E1',text:'#B07D00',border:'#FFE082',label:'Needs Attention'},'🔴':{bg:'#FDECEA',text:'#C0392B',border:'#F5C6C2',label:'At Risk'},'⚫':{bg:'#F5F5F5',text:'#757575',border:'#BDBDBD',label:'Churned'}};
+const RAW = {
+  "Customer A": {
+    feature2: [51, 10, 13, 8, 28],
+    feature3: [0, 4, 0, 10, 0],
+    feature5: [19, 19, 2, 2, 5],
+    feature8: [70, 0, 24, 0, 25]
+  },
+  "Customer B": {
+    feature2: [0, 73, 0, 0, 55],
+    feature3: [59, 32, 32, 0, 64],
+    feature5: [37, 10, 0, 44, 0]
+  },
+  "Customer C": {
+    feature2: [172, 0, 81, 90, 149],
+    feature3: [0, 0, 179, 16, 80],
+    feature5: [421, 367, 343, 482, 87]
+  },
+  "Customer D": {
+    feature2: [0, 0, 67, 204, 447],
+    feature3: [0, 141, 36, 141, 107],
+    feature4: [49, 20, 0, 0, 2],
+    feature5: [47, 2, 0, 157, 33]
+  },
+  "Customer E": {
+    feature1: [336, 28, 446, 448, 287],
+    feature2: [101, 0, 16, 0, 113],
+    feature3: [0, 4, 0, 0, 0],
+    feature4: [10, 79, 33, 78, 16],
+    feature5: [8, 5, 0, 0, 5]
+  },
+  "Customer F": {
+    feature1: [42, 53, 136, 177, 7],
+    feature2: [330, 357, 266, 86, 115],
+    feature3: [258, 115, 404, 437, 0],
+    feature4: [24, 7, 12, 1, 16],
+    feature5: [0, 45, 45, 47, 0]
+  },
+  "Customer G": {
+    feature2: [0, 0, 0, 10, 8],
+    feature5: [11, 16, 26, 23, 43]
+  },
+  "Customer H": {
+    feature2: [7, 2, 3, 1, 0],
+    feature4: [38, 153, 169, 40, 34],
+    feature5: [0, 2, 3, 4, 4]
+  },
+  "Customer I": {
+    feature1: [5, 10, 9, 3, 0],
+    feature2: [75, 67, 65, 0, 0],
+    feature3: [0, 94, 398, 89, 0],
+    feature5: [285, 0, 272, 402, 453]
+  },
+  "Customer J": {
+    feature2: [0, 0, 0, 0, 15],
+    feature5: [10, 10, 5, 9, 9],
+    feature7: [29, 30, 18, 7, 5]
+  },
+  "Customer K": {
+    feature2: [0, 19, 110, 0, 32],
+    feature3: [21, 5, 5, 8, 4],
+    feature4: [42, 58, 0, 132, 108],
+    feature5: [3, 1, 15, 1, 17]
+  },
+  "Customer L": {
+    feature1: [492, 0, 404, 0, 44],
+    feature2: [24, 17, 34, 69, 74],
+    feature3: [23, 177, 0, 69, 163],
+    feature4: [2, 4, 0, 8, 0],
+    feature5: [469, 67, 0, 481, 0],
+    feature8: [6, 0, 10, 7, 17]
+  },
+  "Customer M": {
+    feature1: [26, 0, 1, 0, 7],
+    feature2: [479, 338, 222, 280, 202],
+    feature3: [111, 176, 0, 374, 208],
+    feature4: [17, 0, 33, 8, 0],
+    feature5: [172, 154, 0, 118, 0],
+    feature6: [34, 43, 71, 5, 40],
+    feature7: [1, 3, 17, 8, 1]
+  },
+  "Customer N": {
+    feature4: [2, 0, 7, 0, 4],
+    feature5: [9, 3, 10, 6, 8]
+  },
+  "Customer O": {
+    feature1: [20, 2, 23, 21, 23],
+    feature2: [0, 259, 417, 424, 409],
+    feature3: [0, 0, 4, 15, 21],
+    feature4: [4, 1, 2, 9, 2],
+    feature5: [0, 130, 434, 374, 119],
+    feature7: [98, 0, 74, 158, 51]
+  },
+  "Customer P": {
+    feature1: [6, 5, 3, 0, 0],
+    feature2: [13, 63, 67, 60, 16],
+    feature3: [0, 480, 149, 420, 231],
+    feature4: [27, 0, 0, 34, 17],
+    feature5: [261, 58, 119, 449, 13]
+  },
+  "Customer Q": {
+    feature2: [0, 15, 24, 0, 11],
+    feature3: [1, 6, 2, 4, 5]
+  },
+  "Customer R": {
+    feature2: [51, 76, 0, 36, 36],
+    feature3: [0, 3, 0, 9, 6],
+    feature5: [195, 142, 185, 0, 106]
+  },
+  "Customer S": {
+    feature1: [36, 74, 141, 0, 88],
+    feature2: [34, 31, 72, 16, 0],
+    feature3: [0, 26, 8, 11, 15],
+    feature5: [0, 0, 0, 24, 95],
+    feature7: [26, 53, 68, 0, 8]
+  },
+  "Customer T": {
+    feature1: [93, 0, 162, 56, 0],
+    feature2: [21, 10, 28, 5, 0],
+    feature3: [126, 0, 136, 115, 0],
+    feature4: [0, 0, 2, 8, 0],
+    feature5: [0, 0, 1, 5, 5]
+  },
+  "Customer U": {
+    feature1: [358, 51, 0, 299, 0],
+    feature4: [0, 2, 59, 41, 32],
+    feature5: [141, 0, 181, 15, 0]
+  },
+  "Customer V": {
+    feature1: [166, 66, 0, 95, 0],
+    feature2: [7, 7, 0, 9, 0],
+    feature3: [80, 50, 0, 0, 76],
+    feature4: [8, 4, 1, 3, 1],
+    feature5: [0, 14, 0, 0, 29],
+    feature6: [11, 43, 0, 68, 5],
+    feature7: [49, 43, 14, 0, 45],
+    feature8: [32, 195, 0, 80, 111]
+  },
+  "Customer W": {},
+  "Customer X": {
+    feature1: [0, 6, 8, 0, 8],
+    feature2: [4, 7, 0, 0, 0],
+    feature3: [2, 6, 6, 10, 0],
+    feature4: [39, 0, 9, 0, 0],
+    feature5: [120, 99, 111, 34, 47]
+  },
+  "Customer Y": {
+    feature1: [5, 3, 6, 8, 10],
+    feature2: [7, 4, 1, 9, 7],
+    feature3: [5, 4, 0, 8, 0],
+    feature4: [20, 8, 28, 25, 0],
+    feature5: [73, 33, 26, 24, 0],
+    feature6: [30, 11, 0, 8, 8]
+  },
+  "Customer Z": {
+    feature3: [1, 0, 4, 6, 0],
+    feature4: [0, 0, 75, 0, 0],
+    feature5: [230, 397, 485, 0, 364]
+  },
+  "Customer AA": {
+    feature1: [20, 73, 0, 20, 334],
+    feature2: [27, 22, 20, 7, 0],
+    feature3: [17, 102, 40, 24, 102],
+    feature4: [37, 54, 40, 46, 3],
+    feature5: [51, 27, 56, 55, 0]
+  },
+  "Customer AB": {
+    feature1: [6, 3, 0, 0, 0],
+    feature2: [0, 95, 44, 0, 134],
+    feature3: [4, 25, 26, 0, 0],
+    feature4: [8, 10, 7, 0, 3],
+    feature5: [20, 27, 19, 0, 17],
+    feature7: [4, 0, 27, 2, 27],
+    feature8: [6, 0, 9, 5, 5]
+  },
+  "Customer AC": {
+    feature1: [0, 189, 225, 0, 0],
+    feature2: [115, 200, 46, 103, 0],
+    feature3: [12, 0, 17, 2, 3],
+    feature5: [66, 0, 49, 18, 0],
+    feature6: [2, 0, 8, 3, 4],
+    feature7: [10, 3, 10, 8, 0]
+  },
+  "Customer AD": {
+    feature2: [246, 0, 260, 0, 102],
+    feature3: [21, 22, 13, 0, 4],
+    feature5: [0, 495, 285, 353, 54],
+    feature6: [51, 48, 48, 47, 11]
+  },
+  "Customer AE": {
+    feature1: [0, 13, 133, 164, 150],
+    feature2: [5, 0, 56, 47, 17],
+    feature3: [0, 6, 0, 78, 0],
+    feature4: [53, 76, 0, 61, 0],
+    feature5: [4, 8, 0, 5, 5],
+    feature7: [0, 6, 10, 9, 4]
+  },
+  "Customer AF": {
+    feature1: [2, 0, 0, 0, 0],
+    feature2: [0, 4, 0, 0, 9],
+    feature3: [45, 17, 13, 186, 184],
+    feature4: [0, 382, 42, 232, 0],
+    feature5: [1, 0, 5, 5, 7],
+    feature6: [152, 495, 44, 8, 0],
+    feature7: [7, 24, 7, 11, 13],
+    feature8: [430, 4, 224, 120, 158]
+  },
+  "Customer AG": {
+    feature1: [19, 0, 5, 0, 0],
+    feature2: [177, 359, 0, 0, 325],
+    feature3: [1, 0, 6, 0, 9],
+    feature4: [7, 0, 0, 0, 0],
+    feature5: [5, 3, 0, 4, 6]
+  },
+  "Customer AH": {
+    feature2: [90, 73, 0, 83, 155],
+    feature3: [148, 16, 16, 396, 0],
+    feature5: [138, 183, 24, 74, 0]
+  },
+  "Customer AI": {
+    feature1: [5, 1, 0, 8, 3],
+    feature2: [132, 41, 55, 60, 29],
+    feature3: [9, 6, 7, 2, 1],
+    feature4: [0, 70, 49, 30, 17],
+    feature5: [353, 331, 0, 268, 0],
+    feature6: [190, 119, 198, 60, 0],
+    feature7: [179, 0, 0, 181, 159]
+  },
+  "Customer AJ": {
+    feature2: [8, 20, 6, 0, 9],
+    feature3: [0, 4, 3, 5, 4],
+    feature6: [2, 7, 1, 7, 9]
+  },
+  "Customer AK": {
+    feature2: [19, 52, 0, 0, 74]
+  },
+  "Customer AL": {
+    feature1: [216, 342, 451, 329, 437],
+    feature2: [21, 0, 9, 4, 8],
+    feature3: [162, 0, 124, 160, 133],
+    feature4: [11, 13, 30, 2, 7],
+    feature5: [7, 4, 15, 23, 1],
+    feature6: [53, 59, 0, 51, 16],
+    feature7: [29, 196, 7, 0, 322],
+    feature8: [14, 0, 68, 51, 22]
+  },
+  "Customer AM": {
+    feature1: [3, 21, 0, 24, 0],
+    feature2: [21, 26, 15, 25, 5],
+    feature3: [59, 97, 110, 124, 0],
+    feature4: [39, 63, 11, 47, 0],
+    feature5: [8, 0, 42, 18, 45]
+  },
+  "Customer AN": {
+    feature1: [0, 0, 336, 312, 0],
+    feature2: [6, 12, 7, 26, 20],
+    feature3: [47, 458, 326, 102, 110],
+    feature4: [0, 344, 285, 0, 424],
+    feature5: [18, 0, 5, 8, 18],
+    feature6: [4, 0, 357, 341, 239]
+  },
+  "Customer AO": {
+    feature2: [10, 0, 4, 0, 0],
+    feature3: [13, 63, 19, 0, 17]
+  },
+  "Customer AP": {
+    feature3: [0, 44, 68, 27, 44]
+  },
+  "Customer AQ": {
+    feature1: [14, 75, 127, 129, 130],
+    feature2: [64, 43, 0, 17, 12],
+    feature3: [9, 9, 7, 1, 0],
+    feature4: [169, 0, 140, 158, 0],
+    feature5: [43, 0, 235, 90, 0],
+    feature7: [14, 30, 1, 27, 0]
+  },
+  "Customer AR": {
+    feature1: [34, 24, 41, 0, 75],
+    feature2: [9, 0, 0, 10, 7],
+    feature3: [0, 153, 169, 122, 141],
+    feature4: [0, 3, 7, 0, 2],
+    feature5: [0, 0, 5, 4, 3]
+  },
+  "Customer AS": {
+    feature2: [3, 2, 9, 8, 5]
+  },
+  "Customer AT": {
+    feature7: [0, 9, 17, 18, 0],
+    feature2: [216, 302, 0, 192, 442],
+    feature5: [0, 28, 3, 17, 3],
+    feature8: [11, 2, 93, 137, 0]
+  },
+  "Customer AU": {
+    feature8: [0, 21, 57, 23, 23],
+    feature1: [0, 0, 7, 0, 2]
+  },
+  "Customer AV": {
+    feature5: [3, 4, 1, 8, 7],
+    feature8: [23, 2, 0, 20, 5]
+  },
+  "Customer AW": {
+    feature2: [0, 0, 0, 0, 64],
+    feature1: [4, 12, 0, 0, 19],
+    feature7: [7, 7, 6, 3, 6],
+    feature8: [59, 168, 0, 28, 185]
+  },
+  "Customer AX": {
+    feature4: [15, 3, 14, 9, 0],
+    feature7: [42, 69, 0, 56, 53],
+    feature6: [0, 348, 317, 226, 0]
+  },
+  "Customer AY": {
+    feature4: [25, 22, 34, 30, 45],
+    feature3: [0, 52, 0, 173, 43],
+    feature1: [228, 136, 379, 287, 318]
+  }
+};
+const USERS_RAW = {
+  "Customer A": [3, 0, 0, 0, 0],
+  "Customer B": [2, 1, 1, 4, 3],
+  "Customer C": [3, 4, 0, 2, 2],
+  "Customer D": [8, 10, 6, 6, 5],
+  "Customer E": [8, 4, 8, 6, 6],
+  "Customer F": [7, 6, 8, 6, 6],
+  "Customer G": [2, 6, 7, 7, 6],
+  "Customer H": [7, 8, 3, 4, 7],
+  "Customer I": [6, 5, 3, 5, 5],
+  "Customer J": [8, 5, 7, 6, 9],
+  "Customer K": [0, 0, 0, 1, 0],
+  "Customer L": [0, 0, 2, 0, 0],
+  "Customer M": [11, 9, 8, 10, 6],
+  "Customer N": [10, 9, 9, 7, 11],
+  "Customer O": [3, 5, 1, 6, 4],
+  "Customer P": [10, 6, 7, 9, 5],
+  "Customer Q": [7, 8, 4, 8, 6],
+  "Customer R": [0, 2, 3, 3, 1],
+  "Customer S": [8, 9, 10, 10, 7],
+  "Customer T": [2, 2, 1, 2, 6],
+  "Customer U": [4, 6, 6, 4, 5],
+  "Customer V": [7, 7, 6, 9, 8],
+  "Customer W": [1, 4, 2, 0, 0],
+  "Customer X": [7, 3, 5, 5, 7],
+  "Customer Y": [0, 0, 0, 2, 1],
+  "Customer Z": [3, 3, 4, 1, 4],
+  "Customer AA": [2, 0, 2, 1, 1],
+  "Customer AB": [4, 4, 4, 4, 8],
+  "Customer AC": [8, 6, 6, 3, 7],
+  "Customer AD": [4, 9, 4, 6, 6],
+  "Customer AE": [6, 1, 6, 5, 4],
+  "Customer AF": [3, 1, 2, 1, 5],
+  "Customer AG": [2, 1, 3, 3, 1],
+  "Customer AH": [6, 6, 8, 10, 11],
+  "Customer AI": [5, 5, 6, 7, 5],
+  "Customer AJ": [6, 6, 3, 5, 5],
+  "Customer AK": [10, 5, 8, 7, 7],
+  "Customer AL": [5, 2, 4, 5, 5],
+  "Customer AM": [3, 1, 1, 5, 0],
+  "Customer AN": [10, 6, 5, 6, 6],
+  "Customer AO": [3, 1, 4, 0, 2],
+  "Customer AP": [2, 0, 4, 0, 2],
+  "Customer AQ": [5, 4, 6, 3, 8],
+  "Customer AR": [4, 5, 4, 8, 3],
+  "Customer AS": [5, 3, 4, 1, 3],
+  "Customer AT": [3, 7, 2, 2, 4],
+  "Customer AU": [3, 0, 0, 2, 1],
+  "Customer AV": [7, 8, 8, 7, 7],
+  "Customer AW": [3, 2, 5, 5, 3],
+  "Customer AX": [5, 4, 3, 3, 5],
+  "Customer AY": [7, 8, 9, 5, 6]
+};
+const STATUS = {
+  "Customer A": "🟢",
+  "Customer B": "🟢",
+  "Customer C": "🟢",
+  "Customer D": "🟢",
+  "Customer E": "🔴",
+  "Customer F": "🟢",
+  "Customer G": "🟢",
+  "Customer H": "🟢",
+  "Customer I": "🟢",
+  "Customer J": "🔴",
+  "Customer K": "🟢",
+  "Customer L": "🟡",
+  "Customer M": "🟢",
+  "Customer N": "🔴",
+  "Customer O": "🔴",
+  "Customer P": "🟢",
+  "Customer Q": "🟢",
+  "Customer R": "🔴",
+  "Customer S": "🟡",
+  "Customer T": "🔴",
+  "Customer U": "🔴",
+  "Customer V": "🟢",
+  "Customer W": "🔴",
+  "Customer X": "🔴",
+  "Customer Y": "🟢",
+  "Customer Z": "🔴",
+  "Customer AA": "🟢",
+  "Customer AB": "🟢",
+  "Customer AC": "🟢",
+  "Customer AD": "🔴",
+  "Customer AE": "🔴",
+  "Customer AF": "🟡",
+  "Customer AG": "🟢",
+  "Customer AH": "🟡",
+  "Customer AI": "🟡",
+  "Customer AJ": "🟡",
+  "Customer AK": "🔴",
+  "Customer AL": "🟢",
+  "Customer AM": "🟢",
+  "Customer AN": "🟢",
+  "Customer AO": "🔴",
+  "Customer AP": "🔴",
+  "Customer AQ": "🔴",
+  "Customer AR": "🟢",
+  "Customer AS": "🟢",
+  "Customer AT": "🟡",
+  "Customer AU": "🟢",
+  "Customer AV": "🟡",
+  "Customer AW": "🟡",
+  "Customer AX": "🔴",
+  "Customer AY": "🔴"
+};
+const RECOVERY = {
+  "Customer A": false,
+  "Customer B": false,
+  "Customer C": false,
+  "Customer D": false,
+  "Customer E": false,
+  "Customer F": false,
+  "Customer G": false,
+  "Customer H": false,
+  "Customer I": false,
+  "Customer J": false,
+  "Customer K": false,
+  "Customer L": false,
+  "Customer M": false,
+  "Customer N": false,
+  "Customer O": false,
+  "Customer P": false,
+  "Customer Q": false,
+  "Customer R": false,
+  "Customer S": false,
+  "Customer T": false,
+  "Customer U": false,
+  "Customer V": true,
+  "Customer W": false,
+  "Customer X": false,
+  "Customer Y": false,
+  "Customer Z": false,
+  "Customer AA": false,
+  "Customer AB": false,
+  "Customer AC": false,
+  "Customer AD": false,
+  "Customer AE": false,
+  "Customer AF": false,
+  "Customer AG": false,
+  "Customer AH": false,
+  "Customer AI": false,
+  "Customer AJ": false,
+  "Customer AK": false,
+  "Customer AL": false,
+  "Customer AM": false,
+  "Customer AN": false,
+  "Customer AO": false,
+  "Customer AP": false,
+  "Customer AQ": false,
+  "Customer AR": false,
+  "Customer AS": false,
+  "Customer AT": false,
+  "Customer AU": false,
+  "Customer AV": false,
+  "Customer AW": false,
+  "Customer AX": false,
+  "Customer AY": false
+};
+
+let modalChartTotal=null,modalChartFeatures=null,currentFilter='all';
+function totalEv(co,idx){return ALL_FEATURES.reduce((s,f)=>s+((RAW[co]&&RAW[co][f])?RAW[co][f][idx]:0),0);}
+function activeFeatures(co){return ALL_FEATURES.filter(f=>RAW[co]&&RAW[co][f]&&RAW[co][f][CURRENT_MONTH_IDX]>0).map(f=>FEATURE_LABELS[f]);}
+function setFilter(f,btn){currentFilter=f;document.querySelectorAll('.filter-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');renderCards();}
+function renderCards(){
+  const search=document.getElementById('searchBox').value.toLowerCase();
+  const grid=document.getElementById('cardGrid');grid.innerHTML='';
+  const cos=Object.keys(STATUS).sort();
+  const filtered=cos.filter(co=>{
+    if(currentFilter!=='all'&&STATUS[co]!==currentFilter)return false;
+    if(search&&!co.toLowerCase().includes(search))return false;
+    return true;
+  });
+  filtered.forEach(co=>{
+    const sc=STATUS_COLOR[STATUS[co]]||{bg:'#F5F5F5',text:'#757575',border:'#BDBDBD',label:'Churned'};
+    const ev_cur=totalEv(co,CURRENT_MONTH_IDX);
+    const ev_prev=CURRENT_MONTH_IDX>0?totalEv(co,CURRENT_MONTH_IDX-1):0;
+    const delta=ev_prev>0?Math.round((ev_cur-ev_prev)/ev_prev*100):null;
+    const uu=(USERS_RAW[co]||[])[CURRENT_MONTH_IDX]||0;
+    const feats=activeFeatures(co);
+    const isRec=RECOVERY[co];
+    const div=document.createElement('div');div.className='card';
+    div.innerHTML=`<div class="card-header" style="border-bottom:2px solid ${sc.border}">
+      <div class="name">${co}${isRec?'<span class="recovery-tag">⬆️ Recuperación</span>':''}</div>
+      <span class="status-badge" style="background:${sc.bg};color:${sc.text};border:1px solid ${sc.border}">${STATUS[co]} ${sc.label}</span>
+    </div><div class="card-body">
+      <div class="metrics-row">
+        <div class="metric"><div class="m-val">${ev_cur.toLocaleString()}</div><div class="m-label">Eventos ${MONTHS[CURRENT_MONTH_IDX]}</div></div>
+        <div class="metric"><div class="m-val" style="color:${delta===null?'#9B84B8':delta>=0?'#2E7D32':'#C0392B'}">${delta===null?'—':(delta>=0?'+':'')+delta+'%'}</div><div class="m-label">vs ${MONTHS[CURRENT_MONTH_IDX-1]}</div></div>
+        <div class="metric"><div class="m-val">${uu}</div><div class="m-label">Usuarios activos</div></div>
+      </div>
+      <div style="display:flex;align-items:flex-end;justify-content:space-between;gap:8px;flex-wrap:wrap">
+        <div class="features" style="margin-bottom:0">${feats.map(f=>`<span class="feat-tag">${f}</span>`).join('')||'<span class="feat-tag" style="color:#C0392B">Sin actividad</span>'}</div>
+        <button class="evo-link" onclick="openModal('${co.replace(/'/g,"\'")}')" >Ver evolución</button>
+      </div>
+    </div>`;
+    grid.appendChild(div);
+  });
+  updateStats(cos);
+}
+function openModal(co){
+  document.getElementById('modalTitle').textContent=co;
+  const sc=STATUS_COLOR[STATUS[co]]||{};
+  document.getElementById('modalSub').textContent=(STATUS[co]||'')+' '+(sc.label||'')+(RECOVERY[co]?'  ⬆️ Recuperación':'');
+  if(modalChartTotal){modalChartTotal.destroy();modalChartTotal=null;}
+  if(modalChartFeatures){modalChartFeatures.destroy();modalChartFeatures=null;}
+  const totals=MONTHS.map((_,i)=>totalEv(co,i));
+  const ctxT=document.getElementById('chartTotal').getContext('2d');
+  modalChartTotal=new Chart(ctxT,{type:'line',data:{labels:MONTHS,datasets:[{label:'Total eventos',data:totals,borderColor:'#3B0070',backgroundColor:'#3B007022',tension:.3,pointRadius:5,borderWidth:2.5,fill:true}]},options:{responsive:true,plugins:{legend:{display:false}},scales:{y:{beginAtZero:true}}}});
+  const feats=RAW[co]||{};
+  const colors=['#3B0070','#E8503A','#00897B','#F57F17','#1565C0','#6A1B9A','#2E7D32','#D84315'];
+  let ci=0;const datasets=[];
+  ALL_FEATURES.forEach(f=>{if(feats[f]&&feats[f].some(v=>v>0)){datasets.push({label:FEATURE_LABELS[f],data:feats[f],borderColor:colors[ci%colors.length],backgroundColor:colors[ci%colors.length]+'22',tension:.3,pointRadius:4,borderWidth:2,fill:false});ci++;}});
+  const ctxF=document.getElementById('chartFeatures').getContext('2d');
+  modalChartFeatures=new Chart(ctxF,{type:'line',data:{labels:MONTHS,datasets},options:{responsive:true,plugins:{legend:{position:'bottom',labels:{font:{size:11},boxWidth:12}}},scales:{y:{beginAtZero:true}}}});
+  document.getElementById('modalOverlay').classList.add('open');
+}
+function closeModal(e){if(e.target===document.getElementById('modalOverlay'))closeModalDirect();}
+function closeModalDirect(){document.getElementById('modalOverlay').classList.remove('open');}
+function updateStats(companies){
+  const green=companies.filter(co=>STATUS[co]==='🟢').length;
+  const yellow=companies.filter(co=>STATUS[co]==='🟡').length;
+  const red=companies.filter(co=>STATUS[co]==='🔴').length;
+  const total=companies.length;
+  const uu_cur=Object.values(USERS_RAW).reduce((s,v)=>s+(v[CURRENT_MONTH_IDX]||0),0);
+  const uu_prev=Object.values(USERS_RAW).reduce((s,v)=>s+(v[CURRENT_MONTH_IDX-1]||0),0);
+  document.getElementById('headerMeta').textContent=MONTHS[CURRENT_MONTH_IDX]+' · '+total+' cuentas PAYMENT';
+  document.getElementById('statsRow').innerHTML=`
+    <div class="stat-card"><div class="label">Total cuentas</div><div class="value">${total}</div></div>
+    <div class="stat-card"><div class="label">🟢 Healthy</div><div class="value" style="color:#2E7D32">${green}</div><div class="sub">${Math.round(green/total*100)}%</div></div>
+    <div class="stat-card"><div class="label">🟡 Needs Attention</div><div class="value" style="color:#B07D00">${yellow}</div><div class="sub">${Math.round(yellow/total*100)}%</div></div>
+    <div class="stat-card"><div class="label">🔴 At Risk</div><div class="value" style="color:#C0392B">${red}</div><div class="sub">${Math.round(red/total*100)}%</div></div>
+    <div class="stat-card"><div class="label">Usuarios activos</div><div class="value">${uu_cur}</div><div class="sub">vs ${uu_prev} mes ant.</div></div>`;
+}
+renderCards();
+</script></body></html>
