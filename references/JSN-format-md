@@ -1,0 +1,351 @@
+# JSX Format Reference
+
+## Files
+- **JSX source** (source of truth): `health_evolution.jsx`
+- **HTML output**: `index.html` — single file, overwritten each month, deployed to Vercel
+
+The JSX is never uploaded anywhere. The HTML is the public deliverable.
+
+---
+
+## How to update each month
+
+### Step A: Update the JSX
+
+Read the JSX from the path above. Update these objects:
+
+**1. `MONTHS` — add new month label**
+```javascript
+const MONTHS = ["Ene 2026", "Feb 2026", "Mar 2026", "Abr 2026"];
+// Add the new Spanish month label at the end
+```
+
+**2. `CURRENT_MONTH_IDX` — increment by 1**
+```javascript
+const CURRENT_MONTH_IDX = 3; // 0-based index of the current month
+```
+
+**3. `RAW` — append this month's total events per feature per company**
+```javascript
+const RAW = {
+  "Nombre Empresa": {
+    insights:        [ene_ev, feb_ev, mar_ev, abr_ev],
+    dashboards:      [ene_ev, feb_ev, mar_ev, abr_ev],
+    legacy_reports:  [ene_ev, feb_ev, mar_ev, abr_ev],
+    content_report:  [ene_ev, feb_ev, mar_ev, abr_ev],
+    content_views:   [ene_ev, feb_ev, mar_ev, abr_ev],
+    content_filters: [ene_ev, feb_ev, mar_ev, abr_ev],
+    export_csv:      [ene_ev, feb_ev, mar_ev, abr_ev],
+    goals:           [ene_ev, feb_ev, mar_ev, abr_ev],
+  },
+  ...
+}
+```
+Rules:
+- Append the new month's value to the end of each array
+- If a company had 0 events for a feature this month → append `0`
+- If a company is new this month → add entry with `0` for all prior months
+- If a company churned → append `0` to all arrays
+- Features with all-zero history across all months can be omitted from the object
+
+**4. `USERS_RAW` — append global active users per company**
+```javascript
+const USERS_RAW = {
+  "Nombre Empresa": [ene_uu, feb_uu, mar_uu, abr_uu],
+  ...
+}
+// Value = active_users (global unique users this month, from the combined query)
+// Append the new month's value at the end
+```
+
+**5. `STATUS` — replace with current month's status per company**
+```javascript
+const STATUS = {
+  "Nombre Empresa": "🟢",  // "🟢" | "🟡" | "🔴" | "⚫"
+  ...
+}
+// Not an array — always reflects the current month only. Replace all values.
+```
+
+Save the updated JSX back to the same path (overwrites).
+
+---
+
+### Step B: Compile to HTML
+
+> **IMPORTANTE:** El HTML usa vanilla JS + Chart.js. NO uses React ni Recharts — Recharts UMD no funciona en HTML estático y produce página en blanco.
+> El script extrae los bloques de datos del JSX (MONTHS, CURRENT_MONTH_IDX, RAW, USERS_RAW, STATUS) e inyecta el template vanilla.
+
+```python
+import re, pathlib
+
+JSX_PATH  = "health_evolution.jsx"
+HTML_PATH = "/path/to/index.html"  # use outputs folder
+
+jsx = pathlib.Path(JSX_PATH).read_text()
+
+# Extract data blocks from JSX
+months_val = re.search(r'const MONTHS\s*=\s*(\[.*?\]);', jsx, re.DOTALL).group(1)
+cidx_val   = re.search(r'const CURRENT_MONTH_IDX\s*=\s*(\d+);', jsx).group(1)
+raw_val    = re.search(r'const RAW\s*=\s*(\{.*?\n\};)', jsx, re.DOTALL).group(1)
+users_val  = re.search(r'const USERS_RAW\s*=\s*(\{.*?\n\};)', jsx, re.DOTALL).group(1)
+status_val = re.search(r'const STATUS\s*=\s*(\{.*?\n\};)', jsx, re.DOTALL).group(1)
+
+html = f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8"/>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Customer Health</title>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+  <style>
+    *{{box-sizing:border-box;margin:0;padding:0}}
+    body{{background:#F7F4FF;font-family:system-ui,sans-serif;padding:24px 16px}}
+    .wrap{{max-width:900px;margin:0 auto}}
+    h1{{font-size:22px;font-weight:800;color:#3B0070}}
+    .sub{{font-size:13px;color:#9B84B8;margin-top:4px;margin-bottom:20px}}
+    .filters{{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}}
+    .btn{{border:1px solid #E8DFF5;border-radius:20px;padding:5px 14px;cursor:pointer;
+          font-size:13px;font-weight:600;background:#fff;color:#5C4878}}
+    .btn.active{{background:#3B0070;color:#fff;border-color:#3B0070}}
+    input{{width:100%;padding:10px 16px;border-radius:8px;border:1px solid #E8DFF5;
+           font-size:14px;margin-bottom:16px;color:#1A0033;outline:none}}
+    .summary{{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:20px}}
+    .pill{{border-radius:8px;padding:8px 16px;font-size:13px;font-weight:600}}
+    .card{{background:#fff;border:1px solid #E8DFF5;border-radius:12px;
+           padding:16px 20px;margin-bottom:12px;border-left:4px solid #E8DFF5}}
+    .card-row{{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px}}
+    .company-name{{font-weight:700;font-size:16px;color:#1A0033}}
+    .badge{{border-radius:20px;padding:2px 10px;font-size:12px;font-weight:600;border:1px solid}}
+    .meta{{display:flex;align-items:center;gap:16px;font-size:13px;color:#5C4878}}
+    .toggle{{border:1px solid #E8DFF5;border-radius:6px;padding:4px 12px;
+             cursor:pointer;font-size:12px;font-weight:600;background:transparent;color:#5A0094}}
+    .toggle.open{{background:#3B0070;color:#fff}}
+    .active-feats{{font-size:12px;color:#9B84B8;margin-top:6px}}
+    .charts{{margin-top:16px;display:none}}
+    .charts.open{{display:block}}
+    .chart-label{{font-weight:600;font-size:13px;color:#5C4878;margin:12px 0 6px}}
+    canvas{{max-height:160px;margin-bottom:8px}}
+    .no-results{{text-align:center;color:#9B84B8;padding:40px}}
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Customer Health</h1>
+  <div class="sub" id="sub-line">Cargando...</div>
+  <div class="filters" id="filters"></div>
+  <input id="search" placeholder="Buscar empresa..." oninput="render()"/>
+  <div class="summary" id="summary"></div>
+  <div id="cards"></div>
+</div>
+<script>
+const MONTHS  = {months_val};
+const CIDX    = {cidx_val};
+const RAW     = {raw_val}
+const USERS_RAW = {users_val}
+const STATUS  = {status_val}
+
+const FEATURES = ["insights","dashboards","legacy_reports","content_report",
+                  "content_views","content_filters","export_csv","goals"];
+const FEAT_LABELS = {{
+  insights:"Insights", dashboards:"Dashboards", legacy_reports:"Legacy Reports",
+  content_report:"Content Report", content_views:"Content Views",
+  content_filters:"Content Filters", export_csv:"Export CSV", goals:"Goals"
+}};
+const FEAT_COLORS = ["#3B0070","#7B00C2","#E8503A","#2196F3","#4CAF50","#FF9800","#9C27B0","#00BCD4"];
+const SC = {{
+  "🟢":{{bg:"#E8F5E9",text:"#2E7D32",border:"#A5D6A7",label:"Healthy"}},
+  "🟡":{{bg:"#FFF8E1",text:"#B07D00",border:"#FFE082",label:"Needs Attention"}},
+  "🔴":{{bg:"#FDECEA",text:"#C0392B",border:"#F5C6C2",label:"At Risk"}},
+  "⚫":{{bg:"#F5F5F5",text:"#757575",border:"#BDBDBD",label:"Churned"}}
+}};
+const COMPANIES = Object.keys(RAW).sort();
+let filterStatus = "all";
+const charts = {{}};
+
+function getTotalEv(co, m) {{
+  return FEATURES.reduce((s,f) => s + (RAW[co]?.[f]?.[m] ?? 0), 0);
+}}
+function getActiveFeats(co) {{
+  return FEATURES.filter(f => (RAW[co]?.[f]?.[CIDX] ?? 0) > 0).map(f => FEAT_LABELS[f]);
+}}
+
+const totalUU = COMPANIES.reduce((s,c) => s + (USERS_RAW[c]?.[CIDX] ?? 0), 0);
+document.getElementById("sub-line").textContent =
+  MONTHS[CIDX] + " · " + COMPANIES.length + " cuentas PAYMENT · " + totalUU + " usuarios activos";
+
+const counts = {{"🟢":0,"🟡":0,"🔴":0,"⚫":0}};
+COMPANIES.forEach(c => {{ counts[STATUS[c] ?? "⚫"]++; }});
+
+const filterDef = [
+  ["all","Todas ("+COMPANIES.length+")"],
+  ...Object.entries(SC).map(([s,c]) => [s, s+" "+c.label+" ("+counts[s]+")"])
+];
+const fEl = document.getElementById("filters");
+filterDef.forEach(([val,label]) => {{
+  const b = document.createElement("button");
+  b.className = "btn" + (val==="all"?" active":"");
+  b.textContent = label;
+  b.onclick = () => {{
+    filterStatus = val;
+    fEl.querySelectorAll(".btn").forEach(x => x.classList.remove("active"));
+    b.classList.add("active");
+    render();
+  }};
+  fEl.appendChild(b);
+}});
+
+const sumEl = document.getElementById("summary");
+Object.entries(SC).forEach(([s,c]) => {{
+  const d = document.createElement("div");
+  d.className = "pill";
+  d.style.cssText = `background:${{c.bg}};color:${{c.text}};border:1px solid ${{c.border}}`;
+  d.textContent = s+" "+c.label+": "+counts[s];
+  sumEl.appendChild(d);
+}});
+
+function render() {{
+  const q = document.getElementById("search").value.toLowerCase();
+  const filtered = COMPANIES.filter(c => {{
+    if (q && !c.toLowerCase().includes(q)) return false;
+    if (filterStatus !== "all" && STATUS[c] !== filterStatus) return false;
+    return true;
+  }});
+  const container = document.getElementById("cards");
+  container.innerHTML = "";
+  if (!filtered.length) {{
+    container.innerHTML = '<div class="no-results">Sin resultados</div>';
+    return;
+  }}
+  filtered.forEach(co => {{
+    const st  = STATUS[co] ?? "⚫";
+    const sc  = SC[st];
+    const uu  = USERS_RAW[co]?.[CIDX] ?? 0;
+    const ev  = getTotalEv(co, CIDX);
+    const af  = getActiveFeats(co);
+    const key = co.replace(/[^a-z0-9]/gi,'_');
+    const card = document.createElement("div");
+    card.className = "card";
+    card.style.borderLeftColor = sc.border;
+    card.innerHTML = `
+      <div class="card-row">
+        <div style="display:flex;align-items:center;gap:12px">
+          <span class="company-name">${{co}}</span>
+          <span class="badge" style="background:${{sc.bg}};color:${{sc.text}};border-color:${{sc.border}}">
+            ${{st}} ${{sc.label}}
+          </span>
+        </div>
+        <div class="meta">
+          <span>👥 ${{uu}} uu</span>
+          <span>📊 ${{ev}} ev</span>
+          <button class="toggle" id="btn-${{key}}"
+            onclick="toggle('${{co.replace(/'/g,"\\\\'")}}')">▼ Ver evolución</button>
+        </div>
+      </div>
+      ${{af.length ? `<div class="active-feats">Activas: ${{af.join(" · ")}}</div>` : ""}}
+      <div class="charts" id="charts-${{key}}">
+        <div class="chart-label">Eventos totales</div>
+        <canvas id="c1-${{key}}" height="120"></canvas>
+        <div class="chart-label">Por feature</div>
+        <canvas id="c2-${{key}}" height="160"></canvas>
+      </div>
+    `;
+    container.appendChild(card);
+  }});
+}}
+
+function toggle(co) {{
+  const key = co.replace(/[^a-z0-9]/gi,'_');
+  const chartsDiv = document.getElementById("charts-"+key);
+  const btn = document.getElementById("btn-"+key);
+  const isOpen = chartsDiv.classList.contains("open");
+  if (isOpen) {{
+    chartsDiv.classList.remove("open"); btn.classList.remove("open");
+    btn.textContent = "▼ Ver evolución";
+    if (charts[co+"_1"]) {{ charts[co+"_1"].destroy(); delete charts[co+"_1"]; }}
+    if (charts[co+"_2"]) {{ charts[co+"_2"].destroy(); delete charts[co+"_2"]; }}
+  }} else {{
+    chartsDiv.classList.add("open"); btn.classList.add("open");
+    btn.textContent = "▲ Menos";
+    const ctx1 = document.getElementById("c1-"+key).getContext("2d");
+    charts[co+"_1"] = new Chart(ctx1, {{
+      type:"line",
+      data:{{ labels:MONTHS, datasets:[{{
+        label:"Eventos totales",
+        data:MONTHS.map((m,i) => getTotalEv(co,i)),
+        borderColor:"#5A0094", backgroundColor:"rgba(90,0,148,0.08)",
+        borderWidth:2, pointRadius:4, fill:true, tension:0.3
+      }}]}},
+      options:{{ plugins:{{ legend:{{ display:false }} }},
+        scales:{{ x:{{ ticks:{{ font:{{ size:11 }} }} }}, y:{{ ticks:{{ font:{{ size:11 }} }}, beginAtZero:true }} }} }}
+    }});
+    const activeFeatKeys = FEATURES.filter(f => MONTHS.some((m,i) => (RAW[co]?.[f]?.[i] ?? 0) > 0));
+    const ctx2 = document.getElementById("c2-"+key).getContext("2d");
+    charts[co+"_2"] = new Chart(ctx2, {{
+      type:"line",
+      data:{{ labels:MONTHS, datasets:activeFeatKeys.map((f,i) => ({{
+        label:FEAT_LABELS[f],
+        data:MONTHS.map((m,mi) => RAW[co]?.[f]?.[mi] ?? 0),
+        borderColor:FEAT_COLORS[i % FEAT_COLORS.length],
+        backgroundColor:"transparent", borderWidth:1.5, pointRadius:3, tension:0.3
+      }})) }},
+      options:{{ plugins:{{ legend:{{ position:"bottom", labels:{{ font:{{ size:11 }}, boxWidth:12 }} }} }},
+        scales:{{ x:{{ ticks:{{ font:{{ size:11 }} }} }}, y:{{ ticks:{{ font:{{ size:11 }} }}, beginAtZero:true }} }} }}
+    }});
+  }}
+}}
+render();
+</script>
+</body>
+</html>"""
+
+pathlib.Path(HTML_PATH).write_text(html, encoding="utf-8")
+print(f"HTML generado: {HTML_PATH}")
+```
+
+---
+
+## Data structure summary
+
+| Object | Type | Updated how |
+|---|---|---|
+| `MONTHS` | array of strings | append new label |
+| `CURRENT_MONTH_IDX` | integer | increment by 1 |
+| `RAW` | dict: company → feature → array of ev | append new month |
+| `USERS_RAW` | dict: company → array of uu | append new month |
+| `STATUS` | dict: company → emoji string | replace all values |
+
+---
+
+## Feature keys in RAW
+
+| Key | Feature name | Mixpanel events |
+|---|---|---|
+| `insights` | Insights | Create/Show content navigator insight + Opened email gpt insight notification |
+| `dashboards` | Dashboards | Show/Create dashboard + Update range dashboard |
+| `legacy_reports` | Legacy Reports | Download report/by token/informes | Generate report | Update report |
+| `content_report` | Content Report | Public view ai report |
+| `content_views` | Content Views | Create/Update content navigator + Public view content navigator |
+| `content_filters` | Content Filters | Create/Update application content analytic |
+| `export_csv` | Export CSV | Export content navigator + Export application content analytic |
+| `goals` | Goals | Create/Update campaign + Update goals campaign |
+
+`nuevos_registros` and `nuevos_perfiles` are NOT stored in RAW — they are signal-only (used in Slack, not in history).
+
+---
+
+## Colors (do not modify)
+```javascript
+const B = {
+  purple: "#3B0070", purpleMid: "#5A0094", purpleLight: "#7B00C2",
+  coral: "#E8503A", white: "#FFFFFF", bg: "#F7F4FF", bgCard: "#FFFFFF",
+  border: "#E8DFF5", text: "#1A0033", textMid: "#5C4878", textSoft: "#9B84B8",
+  ink: "#2D0055",
+};
+const STATUS_COLOR = {
+  "🟢": { bg: "#E8F5E9", text: "#2E7D32", border: "#A5D6A7", label: "Healthy" },
+  "🟡": { bg: "#FFF8E1", text: "#B07D00", border: "#FFE082", label: "Needs Attention" },
+  "🔴": { bg: "#FDECEA", text: "#C0392B", border: "#F5C6C2", label: "At Risk" },
+  "⚫": { bg: "#F5F5F5", text: "#757575", border: "#BDBDBD", label: "Churned" },
+};
+```
